@@ -1,0 +1,6 @@
+cmake-build-*
+*.jpg
+!.gitkeep
+test
+*.html
+.idea
