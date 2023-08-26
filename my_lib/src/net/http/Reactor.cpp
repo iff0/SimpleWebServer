@@ -13,12 +13,12 @@ using namespace std::chrono_literals;
 
 namespace my::net::http {
 
-Reactor::Reactor(const Reactor::Config & cfg): m_config{cfg} {
+Reactor::Reactor(const Reactor::Config &cfg) : m_config{cfg} {
 
   m_server_fd = tcp::create_socket();
   tcp::bind(m_server_fd, cfg.ip, cfg.port);
   tcp::listen(m_server_fd, cfg.listen_size);
-  fmt::println("[INFO] Server listening on {}:{}",  cfg.ip, cfg.port);
+  fmt::println("[INFO] Server listening on {}:{}", cfg.ip, cfg.port);
 }
 Reactor::~Reactor() {
   close(m_server_fd);
@@ -58,7 +58,7 @@ auto Reactor::run() -> void {
     if (!lg.try_lock())
       return;
     std::vector<int> idle_connections;
-    for (auto const &[k, v] : m_handlers)
+    for (auto &[k, v] : m_handlers)
       if (v.m_last_alive_time + max_connection_idle_time <
           std::chrono::steady_clock::now())
         idle_connections.emplace_back(k);
@@ -108,6 +108,9 @@ auto Reactor::run() -> void {
       }
       thread_pool.submit([&, fd = fd]() {
         std::shared_lock lg{worker_mutex};
+        if (m_handlers.find(fd) == m_handlers.end())
+          return;
+        auto& handler = m_handlers.at(fd);
         auto state = handler.work(m_config.mapping_path);
         if (state == IOState::PENDING)
           selector.read_again_on(fd);
