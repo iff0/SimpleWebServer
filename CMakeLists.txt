@@ -3,6 +3,11 @@ project(cpp_simple_web_server)
 
 set(CMAKE_CXX_STANDARD 17)
 
+
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE release CACHE STRING "Build Type" FORCE)
+endif()
+
 aux_source_directory(. src)
 #aux_source_directory(test test)
 
