@@ -40,6 +40,12 @@ auto EpollSelector::register_timer(int fd) -> void {
   set_nonblocking_fd(fd);
 }
 
+void EpollSelector::register_on_listening_lt(int fd) const {
+  epoll_event event{.events = EPOLLIN |   EPOLLRDHUP,
+                    .data = {.fd = fd}};
+  epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, fd, &event);
+    set_nonblocking_fd(fd);
+}
 void EpollSelector::register_on_reading(int fd, bool one_shot,
                                         bool blocking) const {
   epoll_event event{.events = EPOLLIN | EPOLLET | EPOLLRDHUP,

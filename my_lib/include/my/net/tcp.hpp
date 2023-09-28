@@ -5,6 +5,7 @@
 #ifndef CPP_SIMPLE_WEB_SERVER_TCP_HPP
 #define CPP_SIMPLE_WEB_SERVER_TCP_HPP
 #include <netinet/in.h>
+#include <string_view>
 namespace my::net::tcp {
 // create some tcp socket file descriptor using sys/socket.h
 int create_socket();

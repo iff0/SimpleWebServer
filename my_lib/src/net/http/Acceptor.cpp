@@ -7,7 +7,7 @@ namespace my::net::http {
 
 Acceptor::Acceptor(int fd) : m_listen_fd{fd} {}
 
-auto Acceptor::accept() const -> Handler {
-  return Handler{my::net::tcp::accept(m_listen_fd)};
+auto Acceptor::accept() const -> std::tuple<int ,struct sockaddr_in> {
+  return my::net::tcp::accept(m_listen_fd);
 }
 } // namespace my::net::http

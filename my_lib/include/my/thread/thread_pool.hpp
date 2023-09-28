@@ -20,13 +20,10 @@ class ThreadPool {
   void worker_thread() {
     while (!m_done) {
       std::function<void()> task;
-      if (m_work_queue.try_pop(task))
+      m_work_queue.wait_and_pop(task);
         task();
-      else
-        std::this_thread::yield();
     }
   }
-
 public:
   explicit ThreadPool(size_t size) : m_threads_count{size}, m_done{false}, m_joiner{m_threads} {
     try {

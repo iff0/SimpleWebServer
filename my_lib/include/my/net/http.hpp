@@ -83,11 +83,12 @@ struct ResponseBuffer {
   std::string s{};
   size_t write_index{0};
   ssize_t file_size{0}, file_write_index{0};
+
 };
 
 class EpollSelector {
 private:
-  constexpr static int MAX_EVENT_NUM = 1000;
+  constexpr static int MAX_EVENT_NUM = 10000;
   std::array<epoll_event, MAX_EVENT_NUM> m_events{};
   int m_timeout{-1};
   int m_epoll_fd, m_listen_fd;
@@ -99,6 +100,8 @@ public:
     enum class Tag { CONNECTION, READ, WRITE, CLOSE } tag;
     int fd;
   };
+
+  void register_on_listening_lt(int fd ) const;
   void register_on_reading(int fd, bool one_shot = true,
                            bool blocking = false) const;
   void register_timer(int fd);
@@ -117,27 +120,24 @@ public:
 class Handler {
 private:
   constexpr static size_t READ_BUFFER_SIZE = 2048;
-  int m_client_fd{};
   struct sockaddr_in m_addr {};
   std::string m_read_buffer{};
   size_t m_read_index{};
   RequestParser m_request_parser{};
   ResponseBuffer m_response_buffer{};
-  bool m_keep_alive{false};
+  bool m_keep_alive{false}, m_open{false};
   std::chrono::steady_clock::time_point m_last_alive_time{
       std::chrono::steady_clock::now()};
 
 public:
   friend class Reactor;
 
-  Handler(int fd, struct sockaddr_in const &);
-  explicit Handler(std::tuple<int, struct sockaddr_in> const &);
-
   [[nodiscard]] std::string get_addr_str() const;
-  IOState read();
+  IOState read(int fd);
   IOState work(std::string_view html_dir);
-  IOState write();
+  IOState write(int fd);
   void clear();
+  void init();
 };
 
 class Acceptor {
@@ -145,27 +145,28 @@ private:
   int m_listen_fd;
 
 public:
-  [[nodiscard]] Handler accept() const;
+  [[nodiscard]] std::tuple<int ,struct sockaddr_in> accept() const;
   explicit Acceptor(int fd);
   Acceptor() = default;
 };
 
 class Reactor {
 public:
+  constexpr static inline size_t MAX_FD = 65536;
   struct Config {
     std::string_view ip;
     int port;
     std::string_view mapping_path = default_html_dir;
-    size_t working_thread_num = 4, max_idle_seconds = 30, selector_size = 5, listen_size = 5;
+    size_t working_thread_num = 4, max_idle_seconds = 30, listen_size = 5, selector_size = 5 ;
   };
+
 private:
-  std::unordered_map<int, Handler> m_handlers{};
+  std::vector<Handler> m_handlers;
   Config m_config;
   int m_server_fd;
 
 public:
-
-  explicit Reactor(const Config&) ;
+  explicit Reactor(const Config &);
   void run();
   ~Reactor();
 };

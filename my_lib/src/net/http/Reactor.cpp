@@ -1,6 +1,7 @@
 //
 // Created by wwww on 2023/8/24.
 //
+#include <arpa/inet.h>
 #include <fmt/core.h>
 #include <my/net/http.hpp>
 #include <my/net/tcp.hpp>
@@ -13,37 +14,52 @@ using namespace std::chrono_literals;
 
 namespace my::net::http {
 
-Reactor::Reactor(const Reactor::Config &cfg) : m_config{cfg} {
+Reactor::Reactor(const Reactor::Config &cfg)
+    : m_config{cfg}, m_handlers(MAX_FD) {
 
   m_server_fd = tcp::create_socket();
+//  struct linger tmp {
+//    1, 1
+//  };
+//  setsockopt(m_server_fd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+  int flag = 1;
+  setsockopt(m_server_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
   tcp::bind(m_server_fd, cfg.ip, cfg.port);
   tcp::listen(m_server_fd, cfg.listen_size);
   fmt::println("[INFO] Server listening on {}:{}", cfg.ip, cfg.port);
 }
 Reactor::~Reactor() {
   close(m_server_fd);
-  for (auto const &kv : m_handlers)
-    close(kv.first);
+  for (int i = 0; i < m_handlers.size(); ++i)
+    if (m_handlers[i].m_open)
+      close(i);
 }
 
 auto Reactor::run() -> void {
+  std::vector<std::mutex> handler_mutex(MAX_FD);
+
   auto selector = EpollSelector(m_server_fd, m_config.selector_size);
-  auto acceptor = Acceptor(m_server_fd);
+//  auto acceptor = Acceptor(m_server_fd);
   auto close_connection = [&](int fd) {
+    std::lock_guard lg{handler_mutex[fd]};
     selector.unregister(fd);
-    m_handlers.erase(fd);
     close(fd);
+    m_handlers[fd].m_open = false;
   };
 
-  auto add_connection = [&](int client_fd, const Handler &handler) {
+  auto add_connection = [&](int client_fd, const sockaddr_in &client_addr) {
     selector.register_on_reading(client_fd);
-    m_handlers.emplace(client_fd, handler);
+    std::lock_guard lg{handler_mutex[client_fd]};
+    auto &handler = m_handlers[client_fd];
+    handler.init();
+    handler.m_addr = client_addr;
   };
 
-  selector.register_on_reading(m_server_fd, false);
+  selector.register_on_listening_lt(m_server_fd);
   auto thread_pool = thread::ThreadPool(m_config.working_thread_num);
 
-  auto max_connection_idle_time = 30s;
+  auto max_connection_idle_time =
+      std::chrono::seconds{m_config.max_idle_seconds};
   auto idle_timer = my::os::Timer(max_connection_idle_time.count(), 0);
   auto idle_timer_fd = idle_timer.get_fd();
   selector.register_timer(idle_timer_fd);
@@ -57,13 +73,12 @@ auto Reactor::run() -> void {
     // dangling reference!
     if (!lg.try_lock())
       return;
-    std::vector<int> idle_connections;
-    for (auto &[k, v] : m_handlers)
-      if (v.m_last_alive_time + max_connection_idle_time <
-          std::chrono::steady_clock::now())
-        idle_connections.emplace_back(k);
-    for (auto fd : idle_connections)
-      close_connection(fd);
+    auto now = std::chrono::steady_clock::now();
+
+    for (int i = 0; i < m_handlers.size(); ++i)
+      if (m_handlers[i].m_open &&
+          m_handlers[i].m_last_alive_time + max_connection_idle_time < now)
+        close_connection(i);
   };
 
   auto done = false;
@@ -73,44 +88,46 @@ auto Reactor::run() -> void {
     auto [tag, fd] = event;
     if (tag == EventTag::CONNECTION) {
       // incoming request
-      auto handler = acceptor.accept();
-      auto client_fd = handler.m_client_fd;
+      auto && [client_fd, client_addr] = my::net::tcp::accept(m_server_fd);
+
+      add_connection(client_fd, client_addr);
       if constexpr (DEBUG) {
-        fmt::println("[INFO] hello from {}  on fd {}", handler.get_addr_str(),
-                     client_fd);
+        fmt::println("[INFO] hello from {}:{} on fd {}",
+                     std::string_view{inet_ntoa(client_addr.sin_addr)},
+                     ntohs(client_addr.sin_port), client_fd);
       }
-      add_connection(client_fd, handler);
       continue;
     }
     if (fd == idle_timer_fd) {
-      //      fmt::println("tick {}", idle_timer.tick());
+//            fmt::println("tick {}", idle_timer.tick());
       idle_timer.tick();
       remove_idle_connections();
       continue;
     }
     // maybe its a idled keep-alive that i killed some short seconds before
     // (removed by remove_idle_connections before being looped at)
-    if (m_handlers.find(fd) == m_handlers.end())
+
+    auto &handler = m_handlers[fd];
+    if (!handler.m_open)
       continue;
-    auto &handler = m_handlers.at(fd);
 
     if (tag == EventTag::CLOSE) {
       if constexpr (DEBUG) {
-        fmt::println("[INFO] bye to {}  on fd {}", handler.get_addr_str(),
-                     handler.m_client_fd);
+        fmt::println("[INFO] bye to {}  on fd {}", handler.get_addr_str(), fd);
       }
       close_connection(fd);
     } else if (tag == EventTag::READ) {
-      auto state = handler.read();
+      auto state = handler.read(fd);
       if (state != IOState::OK) {
         close_connection(fd);
         continue;
       }
       thread_pool.submit([&, fd = fd]() {
         std::shared_lock lg{worker_mutex};
-        if (m_handlers.find(fd) == m_handlers.end())
+        std::lock_guard hlg{handler_mutex[fd]};
+        auto &handler = m_handlers[fd];
+        if (!handler.m_open)
           return;
-        auto& handler = m_handlers.at(fd);
         auto state = handler.work(m_config.mapping_path);
         if (state == IOState::PENDING)
           selector.read_again_on(fd);
@@ -118,7 +135,7 @@ auto Reactor::run() -> void {
           selector.write_again_on(fd);
       });
     } else if (tag == EventTag::WRITE) {
-      auto state = handler.write();
+      auto state = handler.write(fd);
       if (state == IOState::PENDING)
         selector.write_again_on(fd);
       else if (state == IOState::KEEP_ALIVE)
