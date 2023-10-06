@@ -31,28 +31,25 @@ Reactor::Reactor(const Reactor::Config &cfg)
 Reactor::~Reactor() {
   close(m_server_fd);
   for (int i = 0; i < m_handlers.size(); ++i)
-    if (m_handlers[i].m_open)
+    if (m_handlers[i] != nullptr)
       close(i);
 }
 
 auto Reactor::run() -> void {
-  std::vector<std::mutex> handler_mutex(MAX_FD);
 
+  auto lazy_current_time = std::chrono::steady_clock::now();
   auto selector = EpollSelector(m_server_fd, m_config.selector_size);
 //  auto acceptor = Acceptor(m_server_fd);
   auto close_connection = [&](int fd) {
-    std::lock_guard lg{handler_mutex[fd]};
+    m_handlers[fd].reset();
     selector.unregister(fd);
     close(fd);
-    m_handlers[fd].m_open = false;
   };
 
   auto add_connection = [&](int client_fd, const sockaddr_in &client_addr) {
     selector.register_on_reading(client_fd);
-    std::lock_guard lg{handler_mutex[client_fd]};
-    auto &handler = m_handlers[client_fd];
-    handler.init();
-    handler.m_addr = client_addr;
+    auto &handler = m_handlers[client_fd] ;
+    handler = std::make_shared<Handler>(lazy_current_time, client_addr);
   };
 
   selector.register_on_listening_lt(m_server_fd);
@@ -64,21 +61,20 @@ auto Reactor::run() -> void {
   auto idle_timer_fd = idle_timer.get_fd();
   selector.register_timer(idle_timer_fd);
 
-  std::shared_mutex worker_mutex;
 
   auto remove_idle_connections = [&] {
-    std::unique_lock lg(worker_mutex, std::defer_lock);
-
     // if there are  some handlers still working, dont remove handler to avoid -
     // dangling reference!
-    if (!lg.try_lock())
-      return;
-    auto now = std::chrono::steady_clock::now();
-
-    for (int i = 0; i < m_handlers.size(); ++i)
-      if (m_handlers[i].m_open &&
-          m_handlers[i].m_last_alive_time + max_connection_idle_time < now)
+    lazy_current_time = std::chrono::steady_clock::now();
+    for (int i = 0; i < m_handlers.size(); ++i) {
+      if (m_handlers[i] == nullptr)
+        continue;
+      if (  m_handlers[i]->m_last_alive_time + max_connection_idle_time <
+              lazy_current_time)
         close_connection(i);
+      else
+        m_handlers[i]->update_current_time(lazy_current_time);
+    }
   };
 
   auto done = false;
@@ -108,34 +104,27 @@ auto Reactor::run() -> void {
     // (removed by remove_idle_connections before being looped at)
 
     auto &handler = m_handlers[fd];
-    if (!handler.m_open)
-      continue;
 
     if (tag == EventTag::CLOSE) {
       if constexpr (DEBUG) {
-        fmt::println("[INFO] bye to {}  on fd {}", handler.get_addr_str(), fd);
+        fmt::println("[INFO] bye to {}  on fd {}", handler->get_addr_str(), fd);
       }
       close_connection(fd);
     } else if (tag == EventTag::READ) {
-      auto state = handler.read(fd);
+      auto state = handler->read(fd);
       if (state != IOState::OK) {
         close_connection(fd);
         continue;
       }
-      thread_pool.submit([&, fd = fd]() {
-        std::shared_lock lg{worker_mutex};
-        std::lock_guard hlg{handler_mutex[fd]};
-        auto &handler = m_handlers[fd];
-        if (!handler.m_open)
-          return;
-        auto state = handler.work(m_config.mapping_path);
+      thread_pool.submit([ &, h = m_handlers[fd], fd = fd ]() {
+        auto state = h->work(m_config.mapping_path);
         if (state == IOState::PENDING)
           selector.read_again_on(fd);
         else
           selector.write_again_on(fd);
       });
     } else if (tag == EventTag::WRITE) {
-      auto state = handler.write(fd);
+      auto state = handler->write(fd);
       if (state == IOState::PENDING)
         selector.write_again_on(fd);
       else if (state == IOState::KEEP_ALIVE)

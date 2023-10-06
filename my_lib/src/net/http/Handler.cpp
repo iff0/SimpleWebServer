@@ -21,7 +21,7 @@ auto Handler::get_addr_str() const -> std::string {
 }
 
 auto Handler::read(int fd) -> IOState {
-  m_last_alive_time = std::chrono::steady_clock::now();
+  m_last_alive_time = m_lazy_current_time;
   if (m_read_buffer.size() < READ_BUFFER_SIZE)
     m_read_buffer.resize(READ_BUFFER_SIZE);
   if (m_read_index >= READ_BUFFER_SIZE)
@@ -100,12 +100,12 @@ auto Handler::work(std::string_view html_dir) -> IOState {
 }
 
 auto Handler::write(int fd) -> IOState {
-  m_last_alive_time = std::chrono::steady_clock::now();
+  m_last_alive_time = m_lazy_current_time;
   //  fmt::println("response is", m_response_buffer.s);
   while (m_response_buffer.write_index < m_response_buffer.s.size()) {
-    auto sent_bytes = send(
-        fd, m_response_buffer.s.data() + m_response_buffer.write_index,
-        m_response_buffer.s.size() - m_response_buffer.write_index, 0);
+    auto sent_bytes =
+        send(fd, m_response_buffer.s.data() + m_response_buffer.write_index,
+             m_response_buffer.s.size() - m_response_buffer.write_index, 0);
     if (sent_bytes < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK)
         return IOState::PENDING;
@@ -116,10 +116,9 @@ auto Handler::write(int fd) -> IOState {
   }
   if (m_response_buffer.file_fd != -1) {
     while (m_response_buffer.file_write_index < m_response_buffer.file_size) {
-      auto sent_bytes = sendfile(fd, m_response_buffer.file_fd,
-                                 &m_response_buffer.file_write_index,
-                                 m_response_buffer.file_size -
-                                     m_response_buffer.file_write_index);
+      auto sent_bytes = sendfile(
+          fd, m_response_buffer.file_fd, &m_response_buffer.file_write_index,
+          m_response_buffer.file_size - m_response_buffer.file_write_index);
       if (sent_bytes < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
           return IOState::PENDING;
@@ -138,14 +137,18 @@ auto Handler::write(int fd) -> IOState {
 
 auto Handler::clear() -> void {
   m_read_index = 0;
-  m_request_parser = {};
-  m_response_buffer = {};
+  m_request_parser = RequestParser();
+  m_response_buffer = ResponseBuffer();
 }
-void Handler::init() {
-  m_open = true;
-  m_keep_alive = false;
-  m_last_alive_time = std::chrono::steady_clock::now();
-  clear();
+
+Handler::Handler(std::chrono::steady_clock::time_point t, const sockaddr_in & addr)
+    : m_read_index{0}, m_request_parser(), m_response_buffer(),
+      m_keep_alive{false}, m_last_alive_time{t}, m_lazy_current_time{t}, m_addr{addr} {
+
+}
+void Handler::update_current_time(
+    std::chrono::steady_clock::time_point t) {
+  m_lazy_current_time = t;
 }
 
 } // namespace my::net::http

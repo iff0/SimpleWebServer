@@ -120,24 +120,23 @@ public:
 class Handler {
 private:
   constexpr static size_t READ_BUFFER_SIZE = 2048;
-  struct sockaddr_in m_addr {};
-  std::string m_read_buffer{};
-  size_t m_read_index{};
-  RequestParser m_request_parser{};
-  ResponseBuffer m_response_buffer{};
-  bool m_keep_alive{false}, m_open{false};
-  std::chrono::steady_clock::time_point m_last_alive_time{
-      std::chrono::steady_clock::now()};
+  struct sockaddr_in m_addr;
+  std::string m_read_buffer;
+  size_t m_read_index;
+  RequestParser m_request_parser;
+  ResponseBuffer m_response_buffer;
+  bool m_keep_alive;
+  std::chrono::steady_clock::time_point m_last_alive_time, m_lazy_current_time;
 
 public:
   friend class Reactor;
-
+  explicit Handler(std::chrono::steady_clock::time_point, const sockaddr_in &);
   [[nodiscard]] std::string get_addr_str() const;
   IOState read(int fd);
   IOState work(std::string_view html_dir);
   IOState write(int fd);
   void clear();
-  void init();
+  void update_current_time(std::chrono::steady_clock::time_point);
 };
 
 class Acceptor {
@@ -161,7 +160,7 @@ public:
   };
 
 private:
-  std::vector<Handler> m_handlers;
+  std::vector<std::shared_ptr<Handler>> m_handlers;
   Config m_config;
   int m_server_fd;
 
