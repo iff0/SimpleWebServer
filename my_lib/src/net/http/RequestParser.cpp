@@ -30,6 +30,7 @@ auto RequestParser::next_line(std::string_view text)
 auto RequestParser::parse_content(std::string_view text) -> IOState {
   if (m_request.content_length + m_pivot < text.size())
     return IOState::PENDING;
+  m_request.content = std::string_view {text.data() + m_pivot, m_request.content_length};
   return IOState::OK;
 }
 

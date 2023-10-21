@@ -5,6 +5,7 @@
 #ifndef CPP_SIMPLE_WEB_SERVER_HTTP_HPP
 #define CPP_SIMPLE_WEB_SERVER_HTTP_HPP
 
+#include "rpc.hpp"
 #include <array>
 #include <iostream>
 #include <memory>
@@ -18,7 +19,7 @@
 #include <vector>
 
 namespace my::net::http {
-
+using RpcFuncTable = std::unordered_map<std::string, rpc::HandlerType>;
 static constexpr std::string_view default_html_dir = "/var/www/html";
 static constexpr std::string_view default_index_page_name = "index.html";
 
@@ -53,7 +54,7 @@ static std::unordered_map<ResponseCode, std::string_view> http_code_to_body{
 
 enum class IOState { OK, PENDING, BAD, KEEP_ALIVE };
 struct Request {
-  std::string_view url, version, host, method;
+  std::string_view url, version, host, method, content;
   size_t content_length{0};
   bool keep_alive{false};
 };
@@ -83,7 +84,6 @@ struct ResponseBuffer {
   std::string s{};
   size_t write_index{0};
   ssize_t file_size{0}, file_write_index{0};
-
 };
 
 class EpollSelector {
@@ -101,7 +101,7 @@ public:
     int fd;
   };
 
-  void register_on_listening_lt(int fd ) const;
+  void register_on_listening_lt(int fd) const;
   void register_on_reading(int fd, bool one_shot = true,
                            bool blocking = false) const;
   void register_timer(int fd);
@@ -133,7 +133,7 @@ public:
   explicit Handler(std::chrono::steady_clock::time_point, const sockaddr_in &);
   [[nodiscard]] std::string get_addr_str() const;
   IOState read(int fd);
-  IOState work(std::string_view html_dir);
+  IOState work(std::string_view html_dir, RpcFuncTable  &);
   IOState write(int fd);
   void clear();
   void update_current_time(std::chrono::steady_clock::time_point);
@@ -144,7 +144,7 @@ private:
   int m_listen_fd;
 
 public:
-  [[nodiscard]] std::tuple<int ,struct sockaddr_in> accept() const;
+  [[nodiscard]] std::tuple<int, struct sockaddr_in> accept() const;
   explicit Acceptor(int fd);
   Acceptor() = default;
 };
@@ -156,7 +156,8 @@ public:
     std::string_view ip;
     int port;
     std::string_view mapping_path = default_html_dir;
-    size_t working_thread_num = 4, max_idle_seconds = 30, listen_size = 5, selector_size = 5 ;
+    size_t working_thread_num = 4, max_idle_seconds = 30, listen_size = 5,
+           selector_size = 5;
   };
 
 private:
@@ -164,10 +165,34 @@ private:
   Config m_config;
   int m_server_fd;
 
+//public:
+  RpcFuncTable m_rpc_funcs;
+
 public:
   explicit Reactor(const Config &);
   void run();
+
   ~Reactor();
+  template <typename Func>
+  bool rpc_register(std::string const &name, Func func) {
+    auto url = std::string{rpc::default_route_prefix} + name;
+    if (m_rpc_funcs.find(url) != m_rpc_funcs.end())
+      return false;
+    m_rpc_funcs[url] = [f = func](std::string_view content) -> std::string {
+      using namespace MyJson;
+      auto j = Json::from_json_text(content);
+      if (!j.has_value())
+        return R"({"rpc_error":"broken client json"})";
+      using ArgT =
+          std::remove_cv_t<std::remove_reference_t<rpc::FirstArgT<Func>>>;
+//      static_assert(std::is_same_v<ArgT, int>);
+      auto arg = j.value().to_type<ArgT>();
+      if (!arg.has_value())
+        return R"({"rpc_error":"broken client arg"})";
+      return Json{f(arg.value())}.to_json_text();
+    };
+    return true;
+  }
 };
 } // namespace my::net::http
 #endif // CPP_SIMPLE_WEB_SERVER_HTTP_HPP

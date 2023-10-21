@@ -9,17 +9,19 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE release CACHE STRING "Build Type" FORCE)
 endif()
 
-aux_source_directory(. src)
-#aux_source_directory(test test)
+aux_source_directory(./src src)
+aux_source_directory(test test)
 
-add_executable(${PROJECT_NAME} ${src})
+add_executable(${PROJECT_NAME} ${src} main.cpp)
 #add_executable(my_test ${test})
+add_executable(test_rpc rpc_client.cpp)
 
-message(${src})
+#message(${src})
 
 add_subdirectory(my_lib)
 
-target_link_libraries(${PROJECT_NAME}  PRIVATE my_lib )
+target_link_libraries(${PROJECT_NAME}  PUBLIC my_lib )
 #target_link_libraries(${PROJECT_NAME}  PRIVATE my_lib -lm -lpthread)
 #target_link_libraries(my_test  PRIVATE my_lib )
+target_link_libraries(test_rpc  PRIVATE my_lib )
 #target_include_directories(${PROJECT_NAME} PRIVATE "my_lib/include")

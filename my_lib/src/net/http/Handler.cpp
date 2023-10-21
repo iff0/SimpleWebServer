@@ -42,7 +42,8 @@ auto Handler::read(int fd) -> IOState {
   return IOState::OK;
 }
 
-auto Handler::work(std::string_view html_dir) -> IOState {
+auto Handler::work(std::string_view html_dir, RpcFuncTable &rpc_table)
+    -> IOState {
   // m_request =
   auto state = m_request_parser.update(
       std::string_view(m_read_buffer.data(), m_read_index));
@@ -52,6 +53,28 @@ auto Handler::work(std::string_view html_dir) -> IOState {
   else if (state == IOState::BAD)
     m_response_buffer.code = ResponseCode::BAD_REQUEST;
   auto &request = m_request_parser.unwrap();
+
+  if constexpr (true) {
+    auto rpc_url = std::string{request.url};
+    std::cout << "got " << rpc_url << '\n';
+    if (rpc_table.find(rpc_url) != rpc_table.end()) {
+      auto res = rpc_table[rpc_url](request.content);
+      m_keep_alive = request.keep_alive;
+      std::stringstream ss;
+      ss << "HTTP/1.1 200 OK\r\n";
+      ss << "Connection: " << (m_keep_alive ? "keep-alive" : "close") << "\r\n";
+      ss << "Content-Length: " << res.size() << "\r\n\r\n";
+      ss << res;
+      m_response_buffer.s = ss.str();
+      fmt::println(
+          R"([{}][{}](RPC) method="{}", url="{}", version="{}", host="{}", keep-alive={}, content-length={}, content={})",
+          get_addr_str(), static_cast<short>(m_response_buffer.code),
+          request.method, request.url, request.version, request.host,
+          request.keep_alive, request.content_length, request.content);
+      return IOState::OK;
+    }
+  }
+
   auto file_name = std::string{html_dir} + std::string{request.url};
   if (request.url.size() < 2)
     file_name += default_index_page_name;
@@ -141,13 +164,12 @@ auto Handler::clear() -> void {
   m_response_buffer = ResponseBuffer();
 }
 
-Handler::Handler(std::chrono::steady_clock::time_point t, const sockaddr_in & addr)
+Handler::Handler(std::chrono::steady_clock::time_point t,
+                 const sockaddr_in &addr)
     : m_read_index{0}, m_request_parser(), m_response_buffer(),
-      m_keep_alive{false}, m_last_alive_time{t}, m_lazy_current_time{t}, m_addr{addr} {
-
-}
-void Handler::update_current_time(
-    std::chrono::steady_clock::time_point t) {
+      m_keep_alive{false}, m_last_alive_time{t}, m_lazy_current_time{t},
+      m_addr{addr} {}
+void Handler::update_current_time(std::chrono::steady_clock::time_point t) {
   m_lazy_current_time = t;
 }
 
