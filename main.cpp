@@ -53,8 +53,5 @@ auto main(int argc, char *argv[]) -> int {
   });
 
   server.rpc_register("calculate", f);
-  //    std::cout << net::rpc::f1("a");
-  //  std::cout << server.m_rpc_funcs["/rpc/cao"]("114");
-  //  std::cout << server.m_rpc_funcs["/rpc/f"]("{\"a\":0.2,\"b\":8}");
   server.run();
 }

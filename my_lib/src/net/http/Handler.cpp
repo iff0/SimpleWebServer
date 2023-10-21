@@ -56,7 +56,6 @@ auto Handler::work(std::string_view html_dir, RpcFuncTable &rpc_table)
 
   if constexpr (true) {
     auto rpc_url = std::string{request.url};
-    std::cout << "got " << rpc_url << '\n';
     if (rpc_table.find(rpc_url) != rpc_table.end()) {
       auto res = rpc_table[rpc_url](request.content);
       m_keep_alive = request.keep_alive;
