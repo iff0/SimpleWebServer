@@ -12,7 +12,7 @@ int main() {
     using namespace std;
     using namespace MyTypeList;
     Client cli;
-    cli.dial("123.60.213.1:9000");
+    cli.dial("/*server address*/ : /*server ip*/");
     cout << cli.call<string, string>("echo", "i am client, rpc okay").value()
          << endl;
 
@@ -24,9 +24,7 @@ int main() {
                 "calculate", Arg{dist(rng), static_cast<int>(dist(rng))});
         if (res.has_value())
             cout << res.value() << '\n';
-        else {
+        else
             cout << "rpc faild\n";
-            break;
-        }
     }
 }
